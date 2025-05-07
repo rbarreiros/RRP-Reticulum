@@ -181,6 +181,21 @@ respond_to_probes = No
 
 loglevel = 4
 
+[authmanager]
+# Enable identity authentication against master server
+enabled = No
+
+# The destination hash of the master server
+master_server_hash = 
+
+# How often to sync with the master server (in seconds)
+sync_interval = 300
+
+# How long to wait between retries on failure (in seconds)
+retry_interval = 60
+
+# Maximum number of retries before waiting for next sync interval
+max_retries = 3
 
 # The interfaces section defines the physical and virtual
 # interfaces Reticulum will use to communicate on. This

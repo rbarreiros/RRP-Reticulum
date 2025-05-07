@@ -163,6 +163,8 @@ class Transport:
 
     identity = None
 
+    auth_manager                = None
+
     @staticmethod
     def start(reticulum_instance):
         Transport.jobs_running = True
@@ -1083,7 +1085,66 @@ class Transport:
         return sent
 
     @staticmethod
+    def initialize_auth_manager(config):
+        """Initialize the AuthManager with configuration from reticulum.config"""
+        from .AuthManager import AuthManager
+        if Transport.auth_manager is None:
+            Transport.auth_manager = AuthManager(config)
+            Transport.auth_manager.start()
+            return True
+        return False
+
+    @staticmethod
     def packet_filter(packet):
+        RNS.log(f"Received packet of type {packet.packet_type}", RNS.LOG_DEBUG)
+
+        '''
+        if Transport.auth_manager is None:
+            RNS.log("AuthManager not initialized or not enabled, bypassing packet filtering")
+        else:
+            
+            # hmmm, when adding a new node to the master server, the nodes in between the new and master server
+            # have no idea about it until they are updated, so either we assume the delay, and the new
+            # node keeps retrying until all nodes in the path get updated, or we do something about it...
+
+
+            # Get source identity
+            source_identity = None
+        
+            try:
+                if packet.packet_type == RNS.Packet.ANNOUNCE:
+                    RNS.log("Packet of type ANNOUNCE", RNS.LOG_DEBUG)
+
+                    if RNS.Identity.validate_announce(packet, only_validate_signature=True):
+                        public_key = packet.data[:RNS.Identity.KEYSIZE//8]
+                        #source_identity = RNS.Identity.recall(RNS.Identity.full_hash(public_key))
+
+                        identity = RNS.Identity(create_keys=False)
+                        identity.load_public_key(public_key)
+                        if(identity.pub != None):
+                            RNS.log(f"Source identity is {identity}")
+                            source_identity = identity
+                    else:
+                        RNS.log("packet announce not validated by Identity...", RNS.LOG_DEBUG)
+
+                elif hasattr(packet, 'destination') and packet.destination and hasattr(packet.destination, 'identity'):
+                    RNS.log(f"Packet of other type.... {packet.packet_type} not ANNOUNCE ?", RNS.LOG_DEBUG)
+                    source_identity = packet.destination.identity
+
+                if source_identity:
+                    if not Transport.auth_manager.is_authorized(source_identity.hash):
+                        RNS.log(f"Dropped packet from unauthorized identity {RNS.prettyhexrep(source_identity.hash)}", RNS.LOG_DEBUG)
+                        return False
+                else:
+                    RNS.log("Could not determine source identity for packet", RNS.LOG_DEBUG)
+                    RNS.log(f"Packet {packet.packet_type}")
+                    return False
+
+            except Exception as e:
+                RNS.log(f"Error checking packet authorization: {str(e)}", RNS.LOG_ERROR)
+                return False
+        '''
+
         # TODO: Think long and hard about this.
         # Is it even strictly necessary with the current
         # transport rules?
