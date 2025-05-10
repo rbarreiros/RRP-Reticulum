@@ -1097,6 +1097,68 @@ class Transport:
     @staticmethod
     def packet_filter(packet):
         
+        if packet.packet_type == RNS.Packet.DATA:
+            #RNS.log(f"DATA ----- TODO", RNS.LOG_DEBUG)
+            #identity = RNS.Identity(create_keys=False)
+            #identity.load_public_key(packet.data[:RNS.Identity.KEYSIZE//8])
+            #RNS.log(f"DATA ---- Source ID Hash is {identity.hash.hex()}", RNS.LOG_DEBUG)
+            #RNS.log(f"DATA ---- destination_hash is {packet.destination_hash.hex()}", RNS.LOG_DEBUG)
+
+            # is this a link ?
+            if packet.destination_type == RNS.Destination.LINK:
+                for link in Transport.active_links:
+                    if link.link_id == packet.destination_hash:
+                        RNS.log(f"DATA ---- LINK PACKET", RNS.LOG_DEBUG)
+            else:
+                # get destination 
+                for destination in Transport.destinations:
+                    if destination.hash == packet.destination_hash and destination.type == packet.destination_type:
+                        # if destination.type == RNS.Destination.PLAIN packet is just local broadcast
+                        # should we ignore ?!?!?!
+                        RNS.log(f"""
+                                DATA ---- 
+                                DESTINATION {destination.hash.hex()} need to find destination identity 
+                                Destination Type: {destination.type}
+                                Context is: {packet.context} 
+                                Header type is {packet.header_type}
+                                """, RNS.LOG_DEBUG)
+                        try:
+                            identity = RNS.Identity.recall(destination.hash)
+                            RNS.log(f"DATA ---- DESTINATION Maybe ? {identity.hash.hex()}", RNS.LOG_DEBUG)
+                        except Exception:
+                            pass
+
+                        try:
+                            identity = RNS.Identity(create_keys=False)
+                            identity.load_public_key(destination.hash)
+                            RNS.log(f"DATA ---- DESTINATION Maybe 2 ? {identity.hash.hex()}", RNS.LOG_DEBUG)
+                        except Exception:
+                            pass
+
+
+        elif packet.packet_type == RNS.Packet.ANNOUNCE:
+            if hasattr(packet, 'destination_hash') and packet.destination_hash:
+                identification = RNS.Identity.recall(packet.destination_hash)
+                if not identification:
+                    RNS.log("ANNOUNCE ---- First Announce packet received. Extracking...")
+                    identity = RNS.Identity(create_keys=False)
+                    identity.load_public_key(packet.data[:RNS.Identity.KEYSIZE//8])
+                    RNS.log(f"ANNOUNCE ---- Source ID Hash is {identity.hash.hex()}", RNS.LOG_DEBUG)
+                else:
+                    RNS.log(f"ANNOUNCE ---- Source ID Hash is {identification.hash.hex()}", RNS.LOG_DEBUG)
+            else:
+                RNS.log(f"ANNOUNCE ---- Unknown packet source, discarding....")
+        elif packet.packet_type == RNS.Packet.LINKREQUEST:
+            RNS.log(f"LINKREQUEST ---- TODO")
+        elif packet.packet_type == RNS.Packet.PROOF:
+            RNS.log(f"PROOF ---- TODO")
+        else:
+            RNS.log(f"UNKNOWN PACKET TYPE ---- DISCARDING")
+            
+        
+
+
+
         #RNS.log(f"PACKET_TYPE ---- {packet.packet_type}", RNS.LOG_DEBUG)
        
         #RNS.log(f"SELF TRANSPORT ---- hash: {Transport.identity.hash.hex()}", RNS.LOG_DEBUG)
@@ -1374,9 +1436,6 @@ class Transport:
             for_local_client_link     = (packet.packet_type != RNS.Packet.ANNOUNCE) and (packet.destination_hash in Transport.link_table and Transport.link_table[packet.destination_hash][IDX_LT_RCVD_IF] in Transport.local_client_interfaces)
             for_local_client_link    |= (packet.packet_type != RNS.Packet.ANNOUNCE) and (packet.destination_hash in Transport.link_table and Transport.link_table[packet.destination_hash][IDX_LT_NH_IF] in Transport.local_client_interfaces)
             proof_for_local_client    = (packet.destination_hash in Transport.reverse_table) and (Transport.reverse_table[packet.destination_hash][IDX_RT_RCVD_IF] in Transport.local_client_interfaces)
-
-            from pprint import pprint
-            RNS.log(pprint(packet.__dir__()), RNS.LOG_DEBUG)
 
             # Plain broadcast packets from local clients are sent
             # directly on all attached interfaces, since they are

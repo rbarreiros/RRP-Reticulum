@@ -336,7 +336,7 @@ class Reticulum:
                 if not self.auth_manager_config.get('master_server_hash'):
                     RNS.log("AuthManager is enabled but no master_server_hash configured", RNS.LOG_ERROR)
                 else:
-                    RNS.Transport.initialize_auth_manager(self.auth_manager_config)
+                    #RNS.Transport.initialize_auth_manager(self.auth_manager_config)
                     RNS.log("AuthManager initialized successfully", RNS.LOG_INFO)
             except Exception as e:
                 RNS.log(f"Failed to initialize AuthManager: {str(e)}", RNS.LOG_ERROR)
