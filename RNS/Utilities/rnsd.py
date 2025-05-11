@@ -181,9 +181,9 @@ respond_to_probes = No
 
 loglevel = 4
 
-[authmanager]
+[identitymanager]
 # Enable identity authentication against master server
-enabled = No
+enabled = Yes
 
 # The destination hash of the master server
 master_server_hash = 
