@@ -1096,7 +1096,7 @@ class Transport:
 
     @staticmethod
     def packet_filter(packet):
-        if not Transport.identity_manager.is_authorized(packet):
+        if Transport.identity_manager and not Transport.identity_manager.is_authorized(packet):
             RNS.log(f"Packet not authorized. Leaving.", RNS.LOG_DEBUG)
             return False
         
