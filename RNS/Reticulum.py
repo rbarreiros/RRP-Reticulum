@@ -542,6 +542,8 @@ class Reticulum:
                     self.identity_manager_config['enabled'] = self.config["identitymanager"].as_bool(option)
                 elif option == "master_server_hash":
                     self.identity_manager_config['master_server_hash'] = value
+                elif option == "master_server_identity":
+                    self.identity_manager_config['master_server_identity'] = value
                 elif option == "sync_interval":
                     self.identity_manager_config['sync_interval'] = int(value)
                 elif option == "retry_interval":
