@@ -163,7 +163,7 @@ class Transport:
 
     identity = None
 
-    auth_manager                = None
+    identity_manager                = None
 
     @staticmethod
     def start(reticulum_instance):
@@ -1085,127 +1085,21 @@ class Transport:
         return sent
 
     @staticmethod
-    def initialize_auth_manager(config):
-        """Initialize the AuthManager with configuration from reticulum.config"""
-        from .AuthManager import AuthManager
-        if Transport.auth_manager is None:
-            Transport.auth_manager = AuthManager(config)
-            Transport.auth_manager.start()
+    def initialize_identity_manager(config):
+        """Initialize the IdentityManager with configuration from reticulum.config"""
+        from .IdentityManager import IdentityManager
+        if Transport.identity_manager is None:
+            Transport.identity_manager = IdentityManager(config)
+            Transport.identity_manager.start()
             return True
         return False
 
     @staticmethod
     def packet_filter(packet):
-        from pprint import pprint
-
-        if packet.packet_type == RNS.Packet.DATA:
-            #RNS.log(f"DATA ----- TODO", RNS.LOG_DEBUG)
-            #identity = RNS.Identity(create_keys=False)
-            #identity.load_public_key(packet.data[:RNS.Identity.KEYSIZE//8])
-            #RNS.log(f"DATA ---- Source ID Hash is {identity.hash.hex()}", RNS.LOG_DEBUG)
-            #RNS.log(f"DATA ---- destination_hash is {packet.destination_hash.hex()}", RNS.LOG_DEBUG)
-
-            # is this a link ?
-            if packet.destination_type == RNS.Destination.LINK:
-                for link in Transport.active_links:
-                    if link.link_id == packet.destination_hash:
-                        RNS.log(f"DATA ---- LINK PACKET", RNS.LOG_DEBUG)
-            else:
-                # get destination 
-                #for destination in Transport.destinations:
-                    #if destination.hash == packet.destination_hash and destination.type == packet.destination_type:
-                if packet.destination_type == RNS.Destination.PLAIN: # packet is just local broadcast
-                    # should we ignore ?!?!?!
-                    RNS.log("PLAIN packet, IGNORE fow now!", RNS.LOG_DEBUG)
-                else:
-
-                    RNS.log(f"""
-                        DATA ---- 
-                        DESTINATION {packet.destination_hash.hex()} need to find destination identity 
-                        Destination Type: {packet.destination_type}
-                        Context is: {packet.context} 
-                        Header type is {packet.header_type}
-                        """, RNS.LOG_DEBUG)
-                    
-                    if hasattr(packet, 'destination'):
-                        RNS.log(f"DESTINATION {pprint(packet.destination)}", RNS.LOG_DEBUG)
-                    elif hasattr(packet, 'link'):
-                        RNS.log(f"LINK {pprint(packet.link)}", RNS.LOG_DEBUG)
-
-                    #RNS.log(f"DATA ----  {len(RNS.Identity.known_destinations)} {RNS.Identity.known_destinations}", RNS.LOG_DEBUG)
-                    for key in RNS.Identity.known_destinations:
-                        RNS.log(f"KDs {key.hex()}", RNS.LOG_DEBUG)
-
-
-                    try:                            
-                        # target identity, the recipient is this pub key
-                        # might not exist, and is requested with a path find packet
-                        identity = RNS.Identity.recall(packet.destination_hash)
-                        RNS.log(f"DATA ---- Packet Destination identity hash is : {identity.hash.hex()}", RNS.LOG_DEBUG)
-
-                        if packet.destination_hash in RNS.Identity.known_destinations:
-                            iden = RNS.Identity.known_destinations[packet.destination_hash]
-
-                            i = RNS.Identity(create_keys = False)
-                            i.load_public_key(iden[2])
-
-                            RNS.log(f"DATA ---- It's a known destination {i.hash.hex()}", RNS.LOG_DEBUG)
-                        else:
-                            RNS.log("DATA ---- packen.destination_hash not in known_destinations", RNS.LOG_DEBUG)
-
-
-                    except Exception:
-                        pass
-
-
-                    # Forwarded packet
-                    #if packet.header_type == RNS.Packet.HEADER_2:
-                    #    if packet.destination_hash in Transport.path_table:
-                    #        announce_packet = Transport.path_table[packet.destination_hash]
-                    #        RNS.log(f"DATA ----- {pprint(announce_packet)}", RNS.LOG_DEBUG)
-
-                    #try:                           
-                    #    identity = RNS.Identity.recall(announce_packet.packet_hash)
-                    #    if identity:
-                    #        RNS.log(f"DATA ---- PATH ANNOUNCE PACKET {identity.hash.hex()}", RNS.LOG_DEBUG)
-                    #        RNS.log(f"DATA ---- PATH ANNOUNCE PACKET HASH {announce_packet.packet_hash.hex()}", RNS.LOG_DEBUG)
-                    #except Exception:
-                    #    pass
-
-
-                    #try:
-                    #    identity = RNS.Identity(create_keys=False)
-                    #    identity.load_public_key(packet.destination_hash)
-                    #    RNS.log(f"DATA ---- DESTINATION Maybe 2 ? {identity.hash.hex()}", RNS.LOG_DEBUG)
-                    #except Exception:
-                    #    pass
-
-
-
-
-        elif packet.packet_type == RNS.Packet.ANNOUNCE:
-            if hasattr(packet, 'destination_hash') and packet.destination_hash:
-                identification = RNS.Identity.recall(packet.destination_hash)
-                if not identification:
-                    RNS.log("ANNOUNCE ---- First Announce packet received. Extracking...")
-                    identity = RNS.Identity(create_keys=False)
-                    identity.load_public_key(packet.data[:RNS.Identity.KEYSIZE//8])
-                    RNS.log(f"ANNOUNCE ---- Source ID Hash is {identity.hash.hex()} ---- key {packet.data[:RNS.Identity.KEYSIZE//8]}", RNS.LOG_DEBUG)
-                else:
-                    RNS.log(f"ANNOUNCE ---- Source ID Hash is {identification.hash.hex()} ---- key {packet.destination_hash}", RNS.LOG_DEBUG)
-            else:
-                RNS.log(f"ANNOUNCE ---- Unknown packet source, discarding....")
-        elif packet.packet_type == RNS.Packet.LINKREQUEST:
-            RNS.log(f"LINKREQUEST ---- TODO")
-        elif packet.packet_type == RNS.Packet.PROOF:
-            RNS.log(f"PROOF ---- TODO")
-        else:
-            RNS.log(f"UNKNOWN PACKET TYPE ---- DISCARDING")
-            
+        if not Transport.identity_manager.is_authorized(packet):
+            RNS.log(f"Packet not authorized. Leaving.", RNS.LOG_DEBUG)
+            return False
         
-
-
-
         #RNS.log(f"PACKET_TYPE ---- {packet.packet_type}", RNS.LOG_DEBUG)
        
         #RNS.log(f"SELF TRANSPORT ---- hash: {Transport.identity.hash.hex()}", RNS.LOG_DEBUG)

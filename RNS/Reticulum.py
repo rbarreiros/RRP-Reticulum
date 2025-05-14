@@ -57,6 +57,7 @@ import array
 import time
 import os
 import RNS
+import traceback
 
 class Reticulum:
     """
@@ -331,15 +332,15 @@ class Reticulum:
         RNS.Transport.start(self)
 
         # Then initialize AuthManager if enabled in config
-        if hasattr(self, 'auth_manager_config') and self.auth_manager_config.get('enabled', False):
+        if hasattr(self, 'identity_manager_config') and self.identity_manager_config.get('enabled', False):
             try:
-                if not self.auth_manager_config.get('master_server_hash'):
-                    RNS.log("AuthManager is enabled but no master_server_hash configured", RNS.LOG_ERROR)
+                if not self.identity_manager_config.get('master_server_hash'):
+                    RNS.log("Identity Manager is enabled but no master_server_hash configured", RNS.LOG_ERROR)
                 else:
-                    #RNS.Transport.initialize_auth_manager(self.auth_manager_config)
-                    RNS.log("AuthManager initialized successfully", RNS.LOG_INFO)
+                    RNS.Transport.initialize_identity_manager(self.identity_manager_config)
+                    RNS.log("Identity Manager initialized successfully", RNS.LOG_INFO)
             except Exception as e:
-                RNS.log(f"Failed to initialize AuthManager: {str(e)}", RNS.LOG_ERROR)
+                RNS.log(f"Failed to initialize Identity Manager: {str(e)} - {traceback.print_exc()}", RNS.LOG_ERROR)
 
         if RNS.vendor.platformutils.use_af_unix():
             self.rpc_addr = f"\0rns/{self.local_socket_path}/rpc"
@@ -526,7 +527,7 @@ class Reticulum:
                         Reticulum.__use_implicit_proof = False
 
         # AuthManager configuration
-        self.auth_manager_config = {
+        self.identity_manager_config = {
             'enabled': False,
             'master_server_hash': None,
             'sync_interval': 300,
@@ -534,19 +535,19 @@ class Reticulum:
             'max_retries': 3
         }
 
-        if "authmanager" in self.config:
-            for option in self.config["authmanager"]:
-                value = self.config["authmanager"][option]
+        if "identitymanager" in self.config:
+            for option in self.config["identitymanager"]:
+                value = self.config["identitymanager"][option]
                 if option == "enabled":
-                    self.auth_manager_config['enabled'] = self.config["authmanager"].as_bool(option)
+                    self.identity_manager_config['enabled'] = self.config["identitymanager"].as_bool(option)
                 elif option == "master_server_hash":
-                    self.auth_manager_config['master_server_hash'] = value
+                    self.identity_manager_config['master_server_hash'] = value
                 elif option == "sync_interval":
-                    self.auth_manager_config['sync_interval'] = int(value)
+                    self.identity_manager_config['sync_interval'] = int(value)
                 elif option == "retry_interval":
-                    self.auth_manager_config['retry_interval'] = int(value)
+                    self.identity_manager_config['retry_interval'] = int(value)
                 elif option == "max_retries":
-                    self.auth_manager_config['max_retries'] = int(value)
+                    self.identity_manager_config['max_retries'] = int(value)
 
         if RNS.compiled: RNS.log("Reticulum running in compiled mode", RNS.LOG_DEBUG)
         else: RNS.log("Reticulum running in interpreted mode", RNS.LOG_DEBUG)
