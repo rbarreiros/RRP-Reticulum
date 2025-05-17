@@ -6,6 +6,11 @@ import asyncio
 import time
 import traceback
 
+from RNS.Reticulum import Reticulum
+from RNS.Interfaces.TCPInterface import TCPInterface, TCPClientInterface, TCPServerInterface
+from RNS.Interfaces.UDPInterface import UDPInterface
+from RNS.Interfaces.BackboneInterface import BackboneInterface, BackboneClientInterface
+
 from RNS.vendor import umsgpack
 from typing import Set, Dict
 from .Merkle import MerkleTree
@@ -444,7 +449,9 @@ class IdentityManager:
 
 
 
-
+    ###
+    ### Ping, returns basic status
+    ###
     def _handle_server_ping(self, message):
         """Handle server ping request"""
         try:
@@ -452,11 +459,14 @@ class IdentityManager:
             our_merkle_hash = self.merkle_tree.get_root_hash()
             needs_sync = server_merkle_hash != our_merkle_hash
             
+            istats = self._get_basic_interface_stats()
+
             # Respond with our current status
             response = {
                 'action': 'pong',
                 'merkle_hash': our_merkle_hash,
-                'needs_sync': needs_sync
+                'needs_sync': needs_sync,
+                'istats': json.loads(istats)
             }
             
             reply = RequestMessage(json=response)
@@ -601,7 +611,6 @@ class IdentityManager:
             RNS.log("Sent ping request to sync server", RNS.LOG_DEBUG)
         except Exception as e:
             RNS.log(f"Error sending ping request: {str(e)}", RNS.LOG_ERROR)
-            self._check_connection()  # Check and possibly reset connection
 
 
     ###
@@ -616,7 +625,10 @@ class IdentityManager:
         if self.sync_in_progress:
             RNS.log("IMANAGER : Sync already in progress, skipping request", RNS.LOG_DEBUG)
             return
-            
+
+        if not self._check_suitable_interfaces():
+            RNS.log("IMANAGER : No suitable interfaces to sync. Sync only happens on TCP/UDP/Backbone interfaces.", RNS.LOG_ERROR)
+
         try:
             # Set sync status
             self.sync_in_progress = True
@@ -671,6 +683,9 @@ class IdentityManager:
             RNS.log("IMANAGER : Sync already in progress, skipping request", RNS.LOG_DEBUG)
             return
             
+        if not self._check_suitable_interfaces():
+            RNS.log("IMANAGER : No suitable interfaces to sync. Sync only happens on TCP/UDP/Backbone interfaces.", RNS.LOG_ERROR)
+
         try:
             # Set sync status
             self.sync_in_progress = True
@@ -738,55 +753,18 @@ class IdentityManager:
 
     def _check_suitable_interfaces(self) -> bool:
         """Check if we have suitable network interfaces for syncing"""
-        # In a real implementation, you might want to check for appropriate network interfaces
-        # For now, we assume all interfaces are suitable
-        
+        suitable_interfaces = [
+            i for i in RNS.Transport.interfaces
+            if isinstance(i, (TCPInterface, TCPClientInterface, TCPServerInterface, UDPInterface, BackboneInterface, BackboneClientInterface))
+        ]
+
         # Check if we're online and can reach the sync server
-        if not RNS.Transport.has_path_to(self.sync_server_hash):
+        if not RNS.Transport.has_path(self.sync_server_hash):
             # Request a path to the server
             RNS.Transport.request_path(self.sync_server_hash)
             return False
             
-        return True
-
-    # sync with server
-    #def _sync_with_server(self) -> bool:
-    #    """Perform sync with server, returns True if sync process started"""
-    #    try:
-    #        # Don't attempt sync if already in progress
-    #        if self.sync_in_progress:
-    #            return False
-                
-            # Check if link is active
-    #        if not self.server_link or self.server_link.status != RNS.Link.ACTIVE:
-    #            RNS.log("Cannot sync: Link not active", RNS.LOG_DEBUG)
-    #            self._check_connection()
-    #            return False
-                
-            # Check if we have suitable interfaces
-    #        if not self._check_suitable_interfaces():
-    #            RNS.log("No suitable network interfaces for sync", RNS.LOG_DEBUG)
-    #            return False
-            
-    #        with self._sync_lock:
-                # Check sync strategy based on last sync time
-    #            current_time = time.time()
-                
-                # If we've never synced or it's been a very long time, do a full sync
-    #            if self.last_sync_time == 0 or (current_time - self.last_sync_time) > self.SYNC_POLL_INTERVAL * 5:
-    #                RNS.log("Performing full sync with server", RNS.LOG_INFO)
-    #                self._request_full_sync()
-    #            else:
-                    # Otherwise, do an incremental sync by first sending a ping
-    #                RNS.log("Checking sync status with server", RNS.LOG_DEBUG)
-    #                self._send_ping_request()
-                
-    #            return True
-                
-    #    except Exception as e:
-    #        RNS.log(f"Error initiating sync with server: {str(e)}", RNS.LOG_ERROR)
-    #        self.sync_in_progress = False
-    #        return False
+        return len(suitable_interfaces) > 0
 
     def _get_all_hashes(self) -> Set[str]:
         """Get all identity hashes from local cache"""
@@ -815,7 +793,7 @@ class IdentityManager:
         """Remove identity hashes from authorized set"""
         if not removed_hashes:
             return
-            
+
         # Get count before removal
         old_count = len(self.authorized_identities)
         
@@ -835,68 +813,29 @@ class IdentityManager:
         else:
             RNS.log("No identities removed", RNS.LOG_DEBUG)
             
-    # Public methods for manual operations
-    
-    def force_sync(self) -> bool:
-        """Force a full sync with the server"""
-        if self.sync_in_progress:
-            RNS.log("Sync already in progress", RNS.LOG_WARNING)
-            return False
-            
-        if not self.server_link or self.server_link.status != RNS.Link.ACTIVE:
-            RNS.log("Not connected to server", RNS.LOG_WARNING)
-            self._check_connection()
-            return False
-            
-        RNS.log("Forcing full sync with server", RNS.LOG_INFO)
-        self._request_full_sync()
-        return True
-        
-    def reconnect(self) -> bool:
-        """Force a reconnection to the server"""
-        RNS.log("Forcing reconnection to server", RNS.LOG_INFO)
-        
-        # Clear connection state
-        if self.server_link:
-            try:
-                self.server_link.teardown()
-            except:
-                pass
-            
-        self.server_link = None
-        self.server_channel = None
-        self.connection_status = self.STATUS_DISCONNECTED
-        self.connection_retry_count = 0
-        self.sync_in_progress = False
-        
-        # Attempt to reconnect
-        self._sync_establish_link()
-        return True
-        
-    def add_identity(self, identity_hash: str) -> bool:
-        """Manually add an identity hash"""
-        if not identity_hash or len(identity_hash) != ((RNS.Reticulum.TRUNCATED_HASHLENGTH // 8) * 2):
-            RNS.log(f"Invalid identity hash format: {identity_hash}", RNS.LOG_ERROR)
-            return False
-            
-        RNS.log(f"Manually adding identity: {identity_hash}", RNS.LOG_INFO)
-        self._update_hashes({identity_hash})
-        return True
-        
-    def remove_identity(self, identity_hash: str) -> bool:
-        """Manually remove an identity hash"""
-        if identity_hash == RNS.Transport.identity.hash.hex():
-            RNS.log("Cannot remove own identity", RNS.LOG_WARNING)
-            return False
-            
-        if identity_hash == self.sync_server_identity:
-            RNS.log("Cannot remove sync server identity", RNS.LOG_WARNING)
-            return False
-            
-        if identity_hash not in self.authorized_identities:
-            RNS.log(f"Identity not found: {identity_hash}", RNS.LOG_WARNING)
-            return False
-            
-        RNS.log(f"Manually removing identity: {identity_hash}", RNS.LOG_INFO)
-        self._remove_hashes({identity_hash})
-        return True
+    ###
+    ### basic interface stats
+    ### 
+    def _get_basic_interface_stats(self):
+        ret = Reticulum.get_instance()
+        if ret.is_connected_to_shared_instance:
+            return {'shared_instance': True}
+        else:
+            interfaces = []
+
+            for interface in RNS.Transport.interfaces:
+                stats = {}
+                stats["name"] = str(interface.name)
+                stats["type"] = str(type(interface).__name__)
+                stats["status"] = interface.online
+                stats["mode"] = interface.mode
+
+                interfaces.append(stats)
+
+        globstats = {}
+
+        if ret.transport_enabled():
+            globstats["uptime"] = time.time() - RNS.Transport.start_time
+
+        globstats["interfaces"] = interfaces
+        return globstats
