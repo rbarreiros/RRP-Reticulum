@@ -216,9 +216,10 @@ class Destination:
                 ratchets_file = open(temp_write_path, "wb")
                 ratchets_file.write(umsgpack.packb(persisted_data))
                 ratchets_file.close()
-                os.unlink(self.ratchets_path)
+                if os.path.isfile(self.ratchets_path): os.unlink(self.ratchets_path)
                 os.rename(temp_write_path, self.ratchets_path)
         except Exception as e:
+            RNS.trace_exception(e)
             self.ratchets = None
             self.ratchets_path = None
             raise OSError("Could not write ratchet file contents for "+str(self)+". The contained exception was: "+str(e), RNS.LOG_ERROR)
@@ -376,7 +377,7 @@ class Destination:
         else:
             self.proof_strategy = proof_strategy
 
-    def register_request_handler(self, path, response_generator = None, allow = ALLOW_NONE, allowed_list = None):
+    def register_request_handler(self, path, response_generator = None, allow = ALLOW_NONE, allowed_list = None, auto_compress = True):
         """
         Registers a request handler.
 
@@ -384,17 +385,15 @@ class Destination:
         :param response_generator: A function or method with the signature *response_generator(path, data, request_id, link_id, remote_identity, requested_at)* to be called. Whatever this funcion returns will be sent as a response to the requester. If the function returns ``None``, no response will be sent.
         :param allow: One of ``RNS.Destination.ALLOW_NONE``, ``RNS.Destination.ALLOW_ALL`` or ``RNS.Destination.ALLOW_LIST``. If ``RNS.Destination.ALLOW_LIST`` is set, the request handler will only respond to requests for identified peers in the supplied list.
         :param allowed_list: A list of *bytes-like* :ref:`RNS.Identity<api-identity>` hashes.
+        :param auto_compress: If ``True`` or ``False``, determines whether automatic compression of responses should be carried out. If set to an integer value, responses will only be auto-compressed if under this size in bytes. If omitted, the default compression settings will be followed.
         :raises: ``ValueError`` if any of the supplied arguments are invalid.
         """
-        if path == None or path == "":
-            raise ValueError("Invalid path specified")
-        elif not callable(response_generator):
-            raise ValueError("Invalid response generator specified")
-        elif not allow in Destination.request_policies:
-            raise ValueError("Invalid request policy")
+        if path == None or path == "": raise ValueError("Invalid path specified")
+        elif not callable(response_generator): raise ValueError("Invalid response generator specified")
+        elif not allow in Destination.request_policies: raise ValueError("Invalid request policy")
         else:
             path_hash = RNS.Identity.truncated_hash(path.encode("utf-8"))
-            request_handler = [path, response_generator, allow, allowed_list]
+            request_handler = [path, response_generator, allow, allowed_list, auto_compress]
             self.request_handlers[path_hash] = request_handler
 
     def deregister_request_handler(self, path):
@@ -418,13 +417,16 @@ class Destination:
         else:
             plaintext = self.decrypt(packet.data)
             packet.ratchet_id = self.latest_ratchet_id
-            if plaintext != None:
+            if plaintext == None: return False
+            else:
                 if packet.packet_type == RNS.Packet.DATA:
                     if self.callbacks.packet != None:
                         try:
                             self.callbacks.packet(plaintext, packet)
                         except Exception as e:
                             RNS.log("Error while executing receive callback from "+str(self)+". The contained exception was: "+str(e), RNS.LOG_ERROR)
+
+                return True
 
     def incoming_link_request(self, data, packet):
         if self.accept_link_requests:
@@ -487,7 +489,6 @@ class Destination:
             self.latest_ratchet_time = 0
             self._reload_ratchets(ratchets_path)
 
-            # TODO: Remove at some point
             RNS.log("Ratchets enabled on "+str(self), RNS.LOG_DEBUG)
             return True
 
@@ -641,7 +642,7 @@ class Destination:
                         RNS.log(f"Decryption still failing after ratchet reload. The contained exception was: {e}", RNS.LOG_ERROR)
                         raise e
 
-                    RNS.log("Decryption succeeded after ratchet reload", RNS.LOG_NOTICE)
+                    if decrypted: RNS.log("Decryption succeeded after ratchet reload", RNS.LOG_NOTICE)
 
                 return decrypted
 

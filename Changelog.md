@@ -1,3 +1,57 @@
+### 2025-05-15: RNS β 0.9.6
+
+This release activates AES-256 as the default encryption mode for all communication. It is the last release that will support the old AES-128 based modes, which will be entirely phased out in the next release.
+
+This release also includes a number of API and resource consumption improvements, and fixes a bug.
+
+**Changes**
+- Enabled AES-256 as default encryption mode for all traffic
+- Added dynamic link keepalive and timeout calculation
+- Added ability to efficiently transfer files as responses in the `Request` API
+- Added ability to include metadata on `Resource` transfers
+- Added option to specify `Resource` auto-compression limits
+- Added option to specify `Request` response auto-compression limits
+- Added `Resource` transfer example
+- Added allow overwrite option to `rncp`
+- Improved hardware MTU auto-configuration
+- Improved handling of file transfers using the `Resource` API
+- Improved `Resource` transfer memory consumption
+- Improved memory consumption of applications connected to a shared instance
+- Improved `rncp` memory consumption for large files
+- Fixed announce handlers not triggering after shared instance disappearance
+
+**Release Hashes**
+```
+a23c64a04c1e83fd0ab449f564ac904da7fd4f61c0faf68a063f486cc48b44bd rns-0.9.6-py3-none-any.whl
+4544882dea902b18b00d8a04c9ab93201974573b7b63c3db06cb310b0acec240 rnspure-0.9.6-py3-none-any.whl
+```
+
+### 2025-05-09: RNS β 0.9.5
+
+This release initiates migration of Reticulum from AES-128 to AES-256 as the default link and packet cipher mode. It is a compatibility/migration release, that while supporting AES-256 doesn't use it by default. It will work with both the old AES-128 based modes, and the new AES-256 based modes. There's a very slight penalty in performance to support both the old and new modes at the same time, but only for single packet APIs (not links), and it really shouldn't be noticeable in any everyday use.
+
+In the next release, version `0.9.6`, Reticulum will transition fully to AES-256 and use it by default for all communications. That means that both single packets and links will use AES-256 by default. The old AES-128 link mode may or may not be available for a few releases, but will ultimately be phased out entirely.
+
+The update requires no intervention, configuration changes or anything similar from a users or developers perspective. Everything should simply work. This goes both for the `0.9.5` update, and the next `0.9.6` update that transitions fully to AES-256.
+
+**Changes**
+- Added support for AES-256 mode to links and packets
+- Added dynamic link mode support
+- Added temporary backwards compatibility for AES-128 link and packet modes
+- Added `get_mode()` method to link API
+- Added tests for all enabled link modes
+- Added `instance_name` option and description to default config file
+- Improved ratchet persist reliability if Reticulum is force killed while persisting ratchets
+- Fixed interface string representation for some interfaces
+- Fixed instance name config option being overwritten if option was not last in section
+- Fixed unhandled potential exception on fast-flapping `BackboneInterface` connections
+
+**Release Hashes**
+```
+ae6587c86c98cae0df73567af093cc92fe204e71bb01f2506da9aec626a27e97 rns-0.9.5-py3-none-any.whl
+96208c1d1234e3e4b1c18ca986bad5d4693aeb431453efd7ade33b87f35600e1 rnspure-0.9.5-py3-none-any.whl
+```
+
 ### 2025-04-15: RNS β 0.9.4
 
 This release significantly improves memory utilisation and performance. It also includes a few new features and general improvements to the included utilities and programs.

@@ -1072,7 +1072,7 @@ class Transport:
 
                     if should_transmit:
                         if not stored_hash:
-                            Transport.packet_hashlist.add(packet.packet_hash)
+                            Transport.add_packet_hash(packet.packet_hash)
                             stored_hash = True
 
                         Transport.transmit(interface, packet.raw)
@@ -1083,6 +1083,11 @@ class Transport:
 
         Transport.jobs_locked = False
         return sent
+
+    @staticmethod
+    def add_packet_hash(packet_hash):
+        if not Transport.owner.is_connected_to_shared_instance:
+            Transport.packet_hashlist.add(packet_hash)
 
     @staticmethod
     def initialize_identity_manager(config):
@@ -1176,9 +1181,9 @@ class Transport:
                 return False
         '''
 
-        # TODO: Think long and hard about this.
-        # Is it even strictly necessary with the current
-        # transport rules?
+        # If connected to a shared instance, it will handle
+        # packet filtering
+        if Transport.owner.is_connected_to_shared_instance: return True
 
         # Filter packets intended for other transport instances
         if packet.transport_id != None and packet.packet_type != RNS.Packet.ANNOUNCE:
@@ -1366,7 +1371,7 @@ class Transport:
                 remember_packet_hash = False
 
             if remember_packet_hash:
-                Transport.packet_hashlist.add(packet.packet_hash)
+                Transport.add_packet_hash(packet.packet_hash)
                 # TODO: Enable when caching has been redesigned
                 # Transport.cache(packet)
             
@@ -1453,6 +1458,7 @@ class Transport:
                                 proof_timeout += now + RNS.Link.ESTABLISHMENT_TIMEOUT_PER_HOP * max(1, remaining_hops)
                                 
                                 path_mtu       = RNS.Link.mtu_from_lr_packet(packet)
+                                mode           = RNS.Link.mode_from_lr_packet(packet)
                                 nh_mtu         = outbound_interface.HW_MTU
                                 if path_mtu:
                                     if outbound_interface.HW_MTU == None:
@@ -1466,7 +1472,7 @@ class Transport:
                                     else:
                                         if nh_mtu < path_mtu:
                                             path_mtu = nh_mtu
-                                            clamped_mtu = RNS.Link.mtu_bytes(path_mtu)
+                                            clamped_mtu = RNS.Link.signalling_bytes(path_mtu, mode)
                                             RNS.log(f"Clamping link MTU to {RNS.prettysize(nh_mtu)}", RNS.LOG_DEBUG) # TODO: Remove debug
                                             new_raw  = new_raw[:-RNS.Link.LINK_MTU_SIZE]+clamped_mtu
 
@@ -1531,7 +1537,7 @@ class Transport:
                             # Add this packet to the filter hashlist if we
                             # have determined that it's actually our turn
                             # to process it.
-                            Transport.packet_hashlist.add(packet.packet_hash)
+                            Transport.add_packet_hash(packet.packet_hash)
 
                             new_raw = packet.raw[0:1]
                             new_raw += struct.pack("!B", packet.hops)
@@ -1920,6 +1926,7 @@ class Transport:
                     for destination in Transport.destinations:
                         if destination.hash == packet.destination_hash and destination.type == packet.destination_type:
                             path_mtu       = RNS.Link.mtu_from_lr_packet(packet)
+                            mode           = RNS.Link.mode_from_lr_packet(packet)
                             if packet.receiving_interface.AUTOCONFIGURE_MTU or packet.receiving_interface.FIXED_MTU:
                                 nh_mtu     = packet.receiving_interface.HW_MTU
                             else:
@@ -1933,7 +1940,7 @@ class Transport:
                                 else:
                                     if nh_mtu < path_mtu:
                                         path_mtu = nh_mtu
-                                        clamped_mtu = RNS.Link.mtu_bytes(path_mtu)
+                                        clamped_mtu = RNS.Link.signalling_bytes(path_mtu, mode)
                                         RNS.log(f"Clamping link MTU to {RNS.prettysize(nh_mtu)}", RNS.LOG_DEBUG) # TODO: Remove debug
                                         packet.data  = packet.data[:-RNS.Link.LINK_MTU_SIZE]+clamped_mtu
 
@@ -1971,18 +1978,17 @@ class Transport:
                     for destination in Transport.destinations:
                         if destination.hash == packet.destination_hash and destination.type == packet.destination_type:
                             packet.destination = destination
-                            destination.receive(packet)
+                            if destination.receive(packet):
+                                if destination.proof_strategy == RNS.Destination.PROVE_ALL:
+                                    packet.prove()
 
-                            if destination.proof_strategy == RNS.Destination.PROVE_ALL:
-                                packet.prove()
-
-                            elif destination.proof_strategy == RNS.Destination.PROVE_APP:
-                                if destination.callbacks.proof_requested:
-                                    try:
-                                        if destination.callbacks.proof_requested(packet):
-                                            packet.prove()
-                                    except Exception as e:
-                                        RNS.log("Error while executing proof request callback. The contained exception was: "+str(e), RNS.LOG_ERROR)
+                                elif destination.proof_strategy == RNS.Destination.PROVE_APP:
+                                    if destination.callbacks.proof_requested:
+                                        try:
+                                            if destination.callbacks.proof_requested(packet):
+                                                packet.prove()
+                                        except Exception as e:
+                                            RNS.log("Error while executing proof request callback. The contained exception was: "+str(e), RNS.LOG_ERROR)
 
             # Handling for proofs and link-request proofs
             elif packet.packet_type == RNS.Packet.PROOF:
@@ -1995,15 +2001,15 @@ class Transport:
                             if packet.receiving_interface == link_entry[IDX_LT_NH_IF]:
                                 try:
                                     if len(packet.data) == RNS.Identity.SIGLENGTH//8+RNS.Link.ECPUBSIZE//2 or len(packet.data) == RNS.Identity.SIGLENGTH//8+RNS.Link.ECPUBSIZE//2+RNS.Link.LINK_MTU_SIZE:
-                                        mtu_bytes = b""
+                                        signalling_bytes = b""
                                         if len(packet.data) == RNS.Identity.SIGLENGTH//8+RNS.Link.ECPUBSIZE//2+RNS.Link.LINK_MTU_SIZE:
-                                            mtu_bytes = RNS.Link.mtu_bytes(RNS.Link.mtu_from_lp_packet(packet))
+                                            signalling_bytes = RNS.Link.signalling_bytes(RNS.Link.mtu_from_lp_packet(packet), RNS.Link.mode_from_lp_packet(packet))
 
                                         peer_pub_bytes = packet.data[RNS.Identity.SIGLENGTH//8:RNS.Identity.SIGLENGTH//8+RNS.Link.ECPUBSIZE//2]
                                         peer_identity = RNS.Identity.recall(link_entry[IDX_LT_DSTHASH])
                                         peer_sig_pub_bytes = peer_identity.get_public_key()[RNS.Link.ECPUBSIZE//2:RNS.Link.ECPUBSIZE]
 
-                                        signed_data = packet.destination_hash+peer_pub_bytes+peer_sig_pub_bytes+mtu_bytes
+                                        signed_data = packet.destination_hash+peer_pub_bytes+peer_sig_pub_bytes+signalling_bytes
                                         signature = packet.data[:RNS.Identity.SIGLENGTH//8]
 
                                         if peer_identity.validate(signature, signed_data):
@@ -2045,7 +2051,7 @@ class Transport:
                                     # Add this packet to the filter hashlist if we
                                     # have determined that it's actually destined
                                     # for this system, and then validate the proof
-                                    Transport.packet_hashlist.add(packet.packet_hash)
+                                    Transport.add_packet_hash(packet.packet_hash)
                                     link.validate_proof(packet)
 
                 elif packet.context == RNS.Packet.RESOURCE_PRF:
@@ -2863,7 +2869,6 @@ class Transport:
         Transport.reverse_table     = {}
         Transport.link_table        = {}
         Transport.held_announces    = {}
-        Transport.announce_handlers = []
         Transport.tunnels           = {}
 
     @staticmethod

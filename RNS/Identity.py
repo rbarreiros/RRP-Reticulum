@@ -79,12 +79,15 @@ class Identity:
     HASHLENGTH                = 256         # In bits
     SIGLENGTH                 = KEYSIZE     # In bits
 
-    NAME_HASH_LENGTH     = 80
-    TRUNCATED_HASHLENGTH = RNS.Reticulum.TRUNCATED_HASHLENGTH
+    NAME_HASH_LENGTH          = 80
+    TRUNCATED_HASHLENGTH      = RNS.Reticulum.TRUNCATED_HASHLENGTH
     """
     Constant specifying the truncated hash length (in bits) used by Reticulum
     for addressable hashes and other purposes. Non-configurable.
     """
+
+    DERIVED_KEY_LENGTH        = 512//8
+    DERIVED_KEY_LENGTH_LEGACY = 256//8
 
     # Storage
     known_destinations = {}
@@ -677,7 +680,7 @@ class Identity:
             shared_key = ephemeral_key.exchange(target_public_key)
             
             derived_key = RNS.Cryptography.hkdf(
-                length=32,
+                length=Identity.DERIVED_KEY_LENGTH,
                 derive_from=shared_key,
                 salt=self.get_salt(),
                 context=self.get_context(),
@@ -691,6 +694,16 @@ class Identity:
         else:
             raise KeyError("Encryption failed because identity does not hold a public key")
 
+    def __decrypt(self, shared_key, ciphertext):
+        derived_key = RNS.Cryptography.hkdf(
+            length=Identity.DERIVED_KEY_LENGTH,
+            derive_from=shared_key,
+            salt=self.get_salt(),
+            context=self.get_context())
+
+        token = Token(derived_key)
+        plaintext = token.decrypt(ciphertext)
+        return plaintext
 
     def decrypt(self, ciphertext_token, ratchets=None, enforce_ratchets=False, ratchet_id_receiver=None):
         """
@@ -700,6 +713,7 @@ class Identity:
         :returns: Plaintext as *bytes*, or *None* if decryption fails.
         :raises: *KeyError* if the instance does not hold a private key.
         """
+
         if self.prv != None:
             if len(ciphertext_token) > Identity.KEYSIZE//8//2:
                 plaintext = None
@@ -714,15 +728,7 @@ class Identity:
                                 ratchet_prv = X25519PrivateKey.from_private_bytes(ratchet)
                                 ratchet_id = Identity._get_ratchet_id(ratchet_prv.public_key().public_bytes())
                                 shared_key = ratchet_prv.exchange(peer_pub)
-                                derived_key = RNS.Cryptography.hkdf(
-                                    length=32,
-                                    derive_from=shared_key,
-                                    salt=self.get_salt(),
-                                    context=self.get_context(),
-                                )
-
-                                token = Token(derived_key)
-                                plaintext = token.decrypt(ciphertext)
+                                plaintext = self.__decrypt(shared_key, ciphertext)
                                 if ratchet_id_receiver:
                                     ratchet_id_receiver.latest_ratchet_id = ratchet_id
                                 
@@ -739,15 +745,8 @@ class Identity:
 
                     if plaintext == None:
                         shared_key = self.prv.exchange(peer_pub)
-                        derived_key = RNS.Cryptography.hkdf(
-                            length=32,
-                            derive_from=shared_key,
-                            salt=self.get_salt(),
-                            context=self.get_context(),
-                        )
+                        plaintext = self.__decrypt(shared_key, ciphertext)
 
-                        token = Token(derived_key)
-                        plaintext = token.decrypt(ciphertext)
                         if ratchet_id_receiver:
                             ratchet_id_receiver.latest_ratchet_id = None
 
@@ -756,7 +755,8 @@ class Identity:
                     if ratchet_id_receiver:
                         ratchet_id_receiver.latest_ratchet_id = None
                     
-                return plaintext;
+                return plaintext
+            
             else:
                 RNS.log("Decryption failed because the token size was invalid.", RNS.LOG_DEBUG)
                 return None

@@ -50,7 +50,7 @@ class Token():
     TOKEN_OVERHEAD  = 48 # Bytes
 
     @staticmethod
-    def generate_key(mode=AES_128_CBC):
+    def generate_key(mode=AES_256_CBC):
         if   mode == AES_128_CBC: return os.urandom(32)
         elif mode == AES_256_CBC: return os.urandom(64)
         else: raise TypeError(f"Invalid token mode: {mode}")
@@ -85,10 +85,8 @@ class Token():
 
 
     def encrypt(self, data = None):
-        iv = os.urandom(16)
-        current_time = int(time.time())
-
         if not isinstance(data, bytes): raise TypeError("Token plaintext input must be bytes")
+        iv = os.urandom(16)
 
         ciphertext = self.mode.encrypt(
             plaintext = PKCS7.pad(data),
@@ -96,7 +94,6 @@ class Token():
             iv = iv)
 
         signed_parts = iv+ciphertext
-
         return signed_parts + HMAC.new(self._signing_key, signed_parts).digest()
 
 
@@ -108,12 +105,10 @@ class Token():
         ciphertext = token[16:-32]
 
         try:
-            plaintext = PKCS7.unpad(
+            return PKCS7.unpad(
                 self.mode.decrypt(
                     ciphertext = ciphertext,
                     key = self._encryption_key,
                     iv = iv))
 
-            return plaintext
-
-        except Exception as e: raise ValueError("Could not decrypt token")
+        except Exception as e: raise ValueError(f"Could not decrypt token: {e}")

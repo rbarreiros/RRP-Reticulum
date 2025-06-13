@@ -40,6 +40,7 @@ import struct
 import math
 import time
 import RNS
+import io
 
 class LinkCallbacks:
     def __init__(self):
@@ -79,19 +80,23 @@ class Link:
     LINK_MTU_SIZE            = 3
     TRAFFIC_TIMEOUT_MIN_MS   = 5
     TRAFFIC_TIMEOUT_FACTOR   = 6
+    KEEPALIVE_MAX_RTT        = 1.75
     KEEPALIVE_TIMEOUT_FACTOR = 4
     """
     RTT timeout factor used in link timeout calculation.
     """
-    STALE_GRACE = 2
+    STALE_GRACE = 5
     """
     Grace period in seconds used in link timeout calculation.
     """
-    KEEPALIVE = 360
+    KEEPALIVE_MAX = 360
+    KEEPALIVE_MIN = 5
+    KEEPALIVE     = KEEPALIVE_MAX
     """
-    Interval for sending keep-alive packets on established links in seconds.
+    Default interval for sending keep-alive packets on established links in seconds.
     """
-    STALE_TIME = 2*KEEPALIVE
+    STALE_FACTOR = 2
+    STALE_TIME = STALE_FACTOR*KEEPALIVE
     """
     If no traffic or keep-alive packets are received within this period, the
     link will be marked as stale, and a final keep-alive packet will be sent.
@@ -99,6 +104,8 @@ class Link:
     ``KEEPALIVE_TIMEOUT_FACTOR`` + ``STALE_GRACE``, the link is considered timed out,
     and will be torn down.
     """
+
+    WATCHDOG_MAX_SLEEP  = 5
 
     PENDING             = 0x00
     HANDSHAKE           = 0x01
@@ -123,14 +130,25 @@ class Link:
     MODE_PQ_RESERVED_2  = 0x05
     MODE_PQ_RESERVED_3  = 0x06
     MODE_PQ_RESERVED_4  = 0x07
-    enabled_modes       = [MODE_AES128_CBC]
+    ENABLED_MODES       = [MODE_AES256_CBC]
+    MODE_DEFAULT        =  MODE_AES256_CBC
+    MODE_DESCRIPTIONS   = {MODE_AES128_CBC: "AES_128_CBC",
+                           MODE_AES256_CBC: "AES_256_CBC",
+                           MODE_AES256_GCM: "MODE_AES256_GCM",
+                           MODE_OTP_RESERVED: "MODE_OTP_RESERVED",
+                           MODE_PQ_RESERVED_1: "MODE_PQ_RESERVED_1",
+                           MODE_PQ_RESERVED_2: "MODE_PQ_RESERVED_2",
+                           MODE_PQ_RESERVED_3: "MODE_PQ_RESERVED_3",
+                           MODE_PQ_RESERVED_4: "MODE_PQ_RESERVED_4"}
 
     MTU_BYTEMASK        = 0x1FFFFF
     MODE_BYTEMASK       = 0xE0
 
     @staticmethod
-    def mtu_bytes(mtu):
-        return struct.pack(">I", mtu & Link.MTU_BYTEMASK)[1:]
+    def signalling_bytes(mtu, mode):
+        if not mode in Link.ENABLED_MODES: raise TypeError(f"Requested link mode {Link.MODE_DESCRIPTIONS[mode]} not enabled")
+        signalling_value = (mtu & Link.MTU_BYTEMASK)+(((mode<<5) & Link.MODE_BYTEMASK)<<16)
+        return struct.pack(">I", signalling_value)[1:]
 
     @staticmethod
     def mtu_from_lr_packet(packet):
@@ -147,21 +165,22 @@ class Link:
 
     @staticmethod
     def mode_byte(mode):
-        if mode in Link.enabled_modes: return (mode << 5) & Link.MODE_BYTEMASK
+        if mode in Link.ENABLED_MODES: return (mode << 5) & Link.MODE_BYTEMASK
         else: raise TypeError(f"Requested link mode {mode} not enabled")
 
     @staticmethod
     def mode_from_lr_packet(packet):
         if len(packet.data) > Link.ECPUBSIZE:
-            return (packet.data[Link.ECPUBSIZE] << 16) + (packet.data[Link.ECPUBSIZE+1] << 8) + (packet.data[Link.ECPUBSIZE+2]) & Link.MODE_BYTEMASK
-        else: return None
+            mode = (packet.data[Link.ECPUBSIZE] & Link.MODE_BYTEMASK) >> 5
+            return mode
+        else: return Link.MODE_DEFAULT
 
     @staticmethod
     def mode_from_lp_packet(packet):
         if len(packet.data) > RNS.Identity.SIGLENGTH//8+Link.ECPUBSIZE//2:
-            mode_byte = packet.data[RNS.Identity.SIGLENGTH//8+Link.ECPUBSIZE//2:RNS.Identity.SIGLENGTH//8+Link.ECPUBSIZE//2+1]
-            return mode_byte & Link.MODE_BYTEMASK
-        else: return None
+            mode = packet.data[RNS.Identity.SIGLENGTH//8+Link.ECPUBSIZE//2] >> 5
+            return mode
+        else: return Link.MODE_DEFAULT
 
     @staticmethod
     def validate_request(owner, data, packet):
@@ -177,6 +196,11 @@ class Link:
                     except Exception as e:
                         RNS.trace_exception(e)
                         link.mtu = RNS.Reticulum.MTU
+
+                link.mode = Link.mode_from_lr_packet(packet)
+                
+                # TODO: Remove debug
+                RNS.log(f"Incoming link request with mode {Link.MODE_DESCRIPTIONS[link.mode]}", RNS.LOG_DEBUG)
 
                 link.update_mdu()
                 link.destination = packet.destination
@@ -206,7 +230,7 @@ class Link:
             return None
 
 
-    def __init__(self, destination=None, established_callback=None, closed_callback=None, owner=None, peer_pub_bytes=None, peer_sig_pub_bytes=None, mode=MODE_AES128_CBC):
+    def __init__(self, destination=None, established_callback=None, closed_callback=None, owner=None, peer_pub_bytes=None, peer_sig_pub_bytes=None, mode=MODE_DEFAULT):
         if destination != None and destination.type != RNS.Destination.SINGLE: raise TypeError("Links can only be established to the \"single\" destination type")
         self.mode = mode
         self.rtt = None
@@ -223,6 +247,7 @@ class Link:
         self.pending_requests   = []
         self.last_inbound = 0
         self.last_outbound = 0
+        self.last_keepalive = 0
         self.last_proof = 0
         self.last_data = 0
         self.tx = 0
@@ -281,12 +306,14 @@ class Link:
             self.set_link_closed_callback(closed_callback)
 
         if self.initiator:
-            link_mtu = b""
+            signalling_bytes = b""
             nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(destination.hash)
             if RNS.Reticulum.link_mtu_discovery() and nh_hw_mtu:
-                link_mtu = Link.mtu_bytes(nh_hw_mtu)
+                signalling_bytes = Link.signalling_bytes(nh_hw_mtu, self.mode)
                 RNS.log(f"Signalling link MTU of {RNS.prettysize(nh_hw_mtu)} for link", RNS.LOG_DEBUG) # TODO: Remove debug
-            self.request_data = self.pub_bytes+self.sig_pub_bytes+link_mtu
+            else: signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)
+            RNS.log(f"Establishing link with mode {Link.MODE_DESCRIPTIONS[self.mode]}", RNS.LOG_DEBUG) # TODO: Remove debug
+            self.request_data = self.pub_bytes+self.sig_pub_bytes+signalling_bytes
             self.packet = RNS.Packet(destination, self.request_data, packet_type=RNS.Packet.LINKREQUEST)
             self.packet.pack()
             self.establishment_cost += len(self.packet.raw)
@@ -342,14 +369,11 @@ class Link:
 
 
     def prove(self):
-        mtu_bytes = b""
-        if self.mtu != RNS.Reticulum.MTU:
-            mtu_bytes = Link.mtu_bytes(self.mtu)
-
-        signed_data = self.link_id+self.pub_bytes+self.sig_pub_bytes+mtu_bytes
+        signalling_bytes = Link.signalling_bytes(self.mtu, self.mode)
+        signed_data = self.link_id+self.pub_bytes+self.sig_pub_bytes+signalling_bytes
         signature = self.owner.identity.sign(signed_data)
 
-        proof_data = signature+self.pub_bytes+mtu_bytes
+        proof_data = signature+self.pub_bytes+signalling_bytes
         proof = RNS.Packet(self, proof_data, packet_type=RNS.Packet.PROOF, context=RNS.Packet.LRPROOF)
         proof.send()
         self.establishment_cost += len(proof.raw)
@@ -372,11 +396,14 @@ class Link:
     def validate_proof(self, packet):
         try:
             if self.status == Link.PENDING:
-                mtu_bytes = b""
+                signalling_bytes = b""
                 confirmed_mtu = None
+                mode = Link.mode_from_lp_packet(packet)
+                RNS.log(f"Validating link request proof with mode {Link.MODE_DESCRIPTIONS[mode]}", RNS.LOG_DEBUG) # TODO: Remove debug
+                if mode != self.mode: raise TypeError(f"Invalid link mode {mode} in link request proof")
                 if len(packet.data) == RNS.Identity.SIGLENGTH//8+Link.ECPUBSIZE//2+Link.LINK_MTU_SIZE:
                     confirmed_mtu = Link.mtu_from_lp_packet(packet)
-                    mtu_bytes = Link.mtu_bytes(confirmed_mtu)
+                    signalling_bytes = Link.signalling_bytes(confirmed_mtu, mode)
                     packet.data = packet.data[:RNS.Identity.SIGLENGTH//8+Link.ECPUBSIZE//2]
                     RNS.log(f"Destination confirmed link MTU of {RNS.prettysize(confirmed_mtu)}", RNS.LOG_DEBUG) # TODO: Remove debug
 
@@ -387,7 +414,7 @@ class Link:
                     self.handshake()
 
                     self.establishment_cost += len(packet.raw)
-                    signed_data = self.link_id+self.peer_pub_bytes+self.peer_sig_pub_bytes+mtu_bytes
+                    signed_data = self.link_id+self.peer_pub_bytes+self.peer_sig_pub_bytes+signalling_bytes
                     signature = packet.data[:RNS.Identity.SIGLENGTH//8]
                     
                     if self.destination.identity.validate(signature, signed_data):
@@ -403,10 +430,12 @@ class Link:
                         self.activated_at = time.time()
                         self.last_proof = self.activated_at
                         RNS.Transport.activate_link(self)
-                        RNS.log("Link "+str(self)+" established with "+str(self.destination)+", RTT is "+str(round(self.rtt, 3))+"s", RNS.LOG_DEBUG)
+                        RNS.log("Link "+str(self)+" established with "+str(self.destination)+", RTT is "+RNS.prettyshorttime(self.rtt), RNS.LOG_DEBUG)
                         
                         if self.rtt != None and self.establishment_cost != None and self.rtt > 0 and self.establishment_cost > 0:
                             self.establishment_rate = self.establishment_cost/self.rtt
+
+                        self.__update_keepalive()
 
                         rtt_data = umsgpack.packb(self.rtt)
                         rtt_packet = RNS.Packet(self, rtt_data, context=RNS.Packet.LRRTT)
@@ -515,6 +544,8 @@ class Link:
                 if self.rtt != None and self.establishment_cost != None and self.rtt > 0 and self.establishment_cost > 0:
                     self.establishment_rate = self.establishment_cost/self.rtt
 
+                self.__update_keepalive()
+
                 try:
                     if self.owner.callbacks.link_established != None:
                             self.owner.callbacks.link_established(self)
@@ -602,6 +633,12 @@ class Link:
         else:
             return None
 
+    def get_mode(self):
+        """
+        :returns: The mode of an established link.
+        """
+        return self.mode
+
     def get_salt(self):
         return self.link_id
 
@@ -651,23 +688,23 @@ class Link:
 
     def had_outbound(self, is_keepalive=False):
         self.last_outbound = time.time()
-        if not is_keepalive:
-            self.last_data = self.last_outbound
+        if not is_keepalive: self.last_data = self.last_outbound
+        else:                self.last_keepalive = self.last_outbound
+
+    def __teardown_packet(self):
+        teardown_packet = RNS.Packet(self, self.link_id, context=RNS.Packet.LINKCLOSE)
+        teardown_packet.send()
+        self.had_outbound()
 
     def teardown(self):
         """
         Closes the link and purges encryption keys. New keys will
         be used if a new link to the same destination is established.
         """
-        if self.status != Link.PENDING and self.status != Link.CLOSED:
-            teardown_packet = RNS.Packet(self, self.link_id, context=RNS.Packet.LINKCLOSE)
-            teardown_packet.send()
-            self.had_outbound()
+        if self.status != Link.PENDING and self.status != Link.CLOSED: self.__teardown_packet()
         self.status = Link.CLOSED
-        if self.initiator:
-            self.teardown_reason = Link.INITIATOR_CLOSED
-        else:
-            self.teardown_reason = Link.DESTINATION_CLOSED
+        if self.initiator: self.teardown_reason = Link.INITIATOR_CLOSED
+        else: self.teardown_reason = Link.DESTINATION_CLOSED
         self.link_closed()
 
     def teardown_packet(self, packet):
@@ -754,9 +791,10 @@ class Link:
                 elif self.status == Link.ACTIVE:
                     activated_at = self.activated_at if self.activated_at != None else 0
                     last_inbound = max(max(self.last_inbound, self.last_proof), activated_at)
+                    now = time.time()
 
-                    if time.time() >= last_inbound + self.keepalive:
-                        if self.initiator:
+                    if now >= last_inbound + self.keepalive:
+                        if self.initiator and now >= self.last_keepalive + self.keepalive:
                             self.send_keepalive()
 
                         if time.time() >= last_inbound + self.stale_time:
@@ -770,6 +808,7 @@ class Link:
 
                 elif self.status == Link.STALE:
                     sleep_time = 0.001
+                    self.__teardown_packet()
                     self.status = Link.CLOSED
                     self.teardown_reason = Link.TIMEOUT
                     self.link_closed()
@@ -782,6 +821,7 @@ class Link:
                     self.teardown()
                     sleep_time = 0.1
 
+                sleep_time = min(sleep_time, Link.WATCHDOG_MAX_SLEEP)
                 sleep(sleep_time)
 
                 if not self.__track_phy_stats:
@@ -804,6 +844,10 @@ class Link:
                 self.snr = packet.snr
             if packet.q != None:
                 self.q = packet.q
+
+    def __update_keepalive(self):
+        self.keepalive = max(min(self.rtt*(Link.KEEPALIVE_MAX/Link.KEEPALIVE_MAX_RTT), Link.KEEPALIVE_MAX), Link.KEEPALIVE_MIN)
+        self.stale_time = self.keepalive * Link.STALE_FACTOR
     
     def send_keepalive(self):
         keepalive_packet = RNS.Packet(self, bytes([0xFF]), context=RNS.Packet.KEEPALIVE)
@@ -822,6 +866,7 @@ class Link:
                 response_generator = request_handler[1]
                 allow              = request_handler[2]
                 allowed_list       = request_handler[3]
+                auto_compress      = request_handler[4]
 
                 allowed = False
                 if not allow == RNS.Destination.ALLOW_NONE:
@@ -840,18 +885,29 @@ class Link:
                     else:
                         raise TypeError("Invalid signature for response generator callback")
 
-                    if response != None:
-                        packed_response = umsgpack.packb([request_id, response])
+                    file_response = False
+                    file_handle   = None
+                    if type(response) == list or type(response) == tuple:
+                        metadata = None
+                        if len(response) > 0 and type(response[0]) == io.BufferedReader:
+                            if len(response) > 1: metadata = response[1]
+                            file_handle = response[0]
+                            file_response = True
 
-                        if len(packed_response) <= self.mdu:
-                            RNS.Packet(self, packed_response, RNS.Packet.DATA, context = RNS.Packet.RESPONSE).send()
+                    if response != None:
+                        if file_response:
+                            response_resource = RNS.Resource(file_handle, self, metadata=metadata, request_id = request_id, is_response = True, auto_compress=auto_compress)
                         else:
-                            response_resource = RNS.Resource(packed_response, self, request_id = request_id, is_response = True)
+                            packed_response = umsgpack.packb([request_id, response])
+                            if len(packed_response) <= self.mdu:
+                                RNS.Packet(self, packed_response, RNS.Packet.DATA, context = RNS.Packet.RESPONSE).send()
+                            else:
+                                response_resource = RNS.Resource(packed_response, self, request_id = request_id, is_response = True, auto_compress=auto_compress)
                 else:
                     identity_string = str(self.get_remote_identity()) if self.get_remote_identity() != None else "<Unknown>"
                     RNS.log("Request "+RNS.prettyhexrep(request_id)+" from "+identity_string+" not allowed for: "+str(path), RNS.LOG_DEBUG)
 
-    def handle_response(self, request_id, response_data, response_size, response_transfer_size):
+    def handle_response(self, request_id, response_data, response_size, response_transfer_size, metadata=None):
         if self.status == Link.ACTIVE:
             remove = None
             for pending_request in self.pending_requests:
@@ -862,7 +918,7 @@ class Link:
                         if pending_request.response_transfer_size == None:
                             pending_request.response_transfer_size = 0
                         pending_request.response_transfer_size += response_transfer_size
-                        pending_request.response_received(response_data)
+                        pending_request.response_received(response_data, metadata)
                     except Exception as e:
                         RNS.log("Error occurred while handling response. The contained exception was: "+str(e), RNS.LOG_ERROR)
 
@@ -885,12 +941,21 @@ class Link:
 
     def response_resource_concluded(self, resource):
         if resource.status == RNS.Resource.COMPLETE:
-            packed_response   = resource.data.read()
-            unpacked_response = umsgpack.unpackb(packed_response)
-            request_id        = unpacked_response[0]
-            response_data     = unpacked_response[1]
+            # If the response resource has metadata, this
+            # is a file response, and we'll pass the open
+            # file handle directly.
+            if resource.has_metadata:
+                self.handle_response(resource.request_id, resource.data, resource.total_size, resource.size, metadata=resource.metadata)
 
-            self.handle_response(request_id, response_data, resource.total_size, resource.size)
+            # If not, we'll unpack the response data and
+            # pass the unpacked structure to the handler
+            else:
+                packed_response   = resource.data.read()
+                unpacked_response = umsgpack.unpackb(packed_response)
+                request_id        = unpacked_response[0]
+                response_data     = unpacked_response[1]
+                self.handle_response(request_id, response_data, resource.total_size, resource.size)
+
         else:
             RNS.log("Incoming response resource failed with status: "+RNS.hexrep([resource.status]), RNS.LOG_DEBUG)
             for pending_request in self.pending_requests:
@@ -1314,6 +1379,7 @@ class RequestReceipt():
         self.response               = None
         self.response_transfer_size = None
         self.response_size          = None
+        self.metadata               = None
         self.status                 = RequestReceipt.SENT
         self.sent_at                = time.time()
         self.progress               = 0
@@ -1400,10 +1466,11 @@ class RequestReceipt():
                 resource.cancel()
 
     
-    def response_received(self, response):
+    def response_received(self, response, metadata=None):
         if not self.status == RequestReceipt.FAILED:
             self.progress = 1.0
             self.response = response
+            self.metadata = metadata
             self.status = RequestReceipt.READY
             self.response_concluded_at = time.time()
 

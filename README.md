@@ -52,7 +52,7 @@ For more info, see [reticulum.network](https://reticulum.network/) and [the FAQ 
 - Forward Secrecy is available for all communication types, both for single packets and over links
 - Reticulum uses the following format for encrypted tokens:
   - Ephemeral per-packet and link keys and derived from an ECDH key exchange on Curve25519
-  - AES-128 or AES-256 in CBC mode with PKCS7 padding
+  - AES-256 in CBC mode with PKCS7 padding
   - HMAC using SHA256 for authentication
   - IVs are generated through os.urandom()
 - Unforgeable packet delivery confirmations
@@ -62,7 +62,7 @@ For more info, see [reticulum.network](https://reticulum.network/) and [the FAQ 
   - Easily create your own custom interfaces for communicating over anything
 - Authentication and virtual network segmentation on all supported interface types
 - An intuitive and easy-to-use API
-  - Simpler and easier to use than sockets APIs and simpler, but more powerful
+  - Simpler and easier to use than sockets APIs, but more powerful
   - Makes building distributed and decentralised applications much simpler
 - Reliable and efficient transfer of arbitrary amounts of data
   - Reticulum can handle a few bytes of data or files of many gigabytes
@@ -86,9 +86,10 @@ following resources.
 
 - You can use the [rnsh](https://github.com/acehoss/rnsh) program to establish remote shell sessions over Reticulum.
 - [LXMF](https://github.com/markqvist/lxmf) is a distributed, delay and disruption tolerant message transfer protocol built on Reticulum
+- The [LXST](https://github.com/markqvist/lxst) protocol and framework provides real-time audio and signals transport over Reticulum. It includes primitives and utilities for building voice-based applications and hardware devices, such as the `rnphone` program, that can be used to build hardware telephones.
 - For an off-grid, encrypted and resilient mesh communications platform, see [Nomad Network](https://github.com/markqvist/NomadNet)
-- The Android, Linux, macOS and Windows app [Sideband](https://github.com/markqvist/Sideband) has a graphical interface and focuses on ease of use.
-- [MeshChat](https://github.com/liamcottle/reticulum-meshchat) is a user-friendly LXMF client, that also supports voice calls.
+- The Android, Linux, macOS and Windows app [Sideband](https://github.com/markqvist/Sideband) has a graphical interface and many advanced features, such as file transfers, image and voice messages, real-time voice calls, a distributed telemetry system, mapping capabilities and full plugin extensibility.
+- [MeshChat](https://github.com/liamcottle/reticulum-meshchat) is a user-friendly LXMF client with a web-based interface, that also supports image and voice messages, as well as file transfers. It also includes a built-in page browser for browsing Nomad Network nodes.
 
 ## Where can Reticulum be used?
 Over practically any medium that can support at least a half-duplex channel
@@ -304,6 +305,8 @@ You can help support the continued development of open, free and private communi
   ```
   0xae89F3B94fC4AD6563F0864a55F9a697a90261ff
   ```
+- Liberapay: https://liberapay.com/Reticulum/
+
 - Ko-Fi: https://ko-fi.com/markqvist
 
 ## Cryptographic Primitives
@@ -327,12 +330,12 @@ intentionally compromised or weakened clone. The utilised primitives are:
   - Ephemeral keys derived from an ECDH key exchange on Curve25519
   - HMAC using SHA256 for message authentication
   - IVs must be generated through `os.urandom()` or better
-  - AES-128 or AES-256 in CBC mode with PKCS7 padding
+  - AES-256 in CBC mode with PKCS7 padding
   - No Fernet version and timestamp metadata fields
 - SHA-256
 - SHA-512
 
-In the default installation configuration, the `X25519`, `Ed25519`, `AES-128-CBC`
+In the default installation configuration, the `X25519`, `Ed25519`,
 and `AES-256-CBC` primitives are provided by [OpenSSL](https://www.openssl.org/)
 (via the [PyCA/cryptography](https://github.com/pyca/cryptography) package).
 The hashing functions `SHA-256` and `SHA-512` are provided by the standard
@@ -347,12 +350,18 @@ provided by the following internal implementations:
 
 
 Reticulum also includes a complete implementation of all necessary primitives
-in pure Python. If OpenSSL & PyCA are not available on the system when
+in pure Python. If OpenSSL and PyCA are not available on the system when
 Reticulum is started, Reticulum will instead use the internal pure-python
 primitives. A trivial consequence of this is performance, with the OpenSSL
 backend being *much* faster. The most important consequence however, is the
 potential loss of security by using primitives that has not seen the same
 amount of scrutiny, testing and review as those from OpenSSL.
+
+Please note that by default, installing Reticulum will **require** OpenSSL and
+PyCA to also be automatically installed if not already available. It is only
+possible to use the pure-python primitives if this requirement is specifically
+overridden by the user, for example by installing the `rnspure` package instead
+of the normal `rns` package, or by running directly from local source-code.
 
 If you want to use the internal pure-python primitives, it is **highly
 advisable** that you have a good understanding of the risks that this pose, and
@@ -377,7 +386,8 @@ projects:
 - [PyCA/cryptography](https://github.com/pyca/cryptography), *BSD License*
 - [Pure-25519](https://github.com/warner/python-pure25519) by [Brian Warner](https://github.com/warner), *MIT License*
 - [Pysha2](https://github.com/thomdixon/pysha2) by [Thom Dixon](https://github.com/thomdixon), *MIT License*
-- [Python-AES](https://github.com/orgurar/python-aes) by [Or Gur Arie](https://github.com/orgurar), *MIT License*
+- [Python AES-128](https://github.com/orgurar/python-aes) by [Or Gur Arie](https://github.com/orgurar), *MIT License*
+- [Python AES-256](https://github.com/boppreh/aes) by [BoppreH](https://github.com/boppreh), *MIT License*
 - [Curve25519.py](https://gist.github.com/nickovs/cc3c22d15f239a2640c185035c06f8a3#file-curve25519-py) by [Nicko van Someren](https://gist.github.com/nickovs), *Public Domain*
 - [I2Plib](https://github.com/l-n-s/i2plib) by [Viktor Villainov](https://github.com/l-n-s)
 - [PySerial](https://github.com/pyserial/pyserial) by Chris Liechti, *BSD License*
